@@ -5,6 +5,25 @@ import json
 
 st.set_page_config(page_title="Table Editor", page_icon="📋", layout="wide")
 
+
+def exec_sql(sess, query):
+    try:
+        rowset=sess.sql(query)       
+    except Exception as e:
+            st.error("Oops! ", query, "error executing", str(e), "occurred.")
+            return pd.DataFrame()
+    else:
+        try:
+            tdf = pd.DataFrame(rowset.collect())
+        except Exception as e1:
+                st.error(str(e1))
+                return pd.DataFrame()
+        else:
+            return tdf
+    return 
+
+
+
 @st.cache_resource
 def init_connection():
     try:
@@ -17,11 +36,11 @@ def init_connection():
 
 @st.cache_data
 def get_table_list(database,schema):
-    try:
+    try:        
         table_list_pk_sql = "show primary keys in schema " + database + "." + schema
         session.sql(table_list_pk_sql).collect()
         table_list_sql = 'SELECT "table_name" FROM table(RESULT_SCAN(LAST_QUERY_ID(-1))) group by "table_name" having sum(1) = 1 '
-        table_list_df= session.sql(table_list_sql).to_pandas()
+        table_list_df= session.sql(table_list_sql).to_pandas()        
         return table_list_df
     except Exception as e:
         st.sidebar.error("Sorry, An error occcured in get_table_list(): " + str(e))
@@ -61,6 +80,7 @@ def get_primary_keys (table_name):
         #because this is a show command we need to get the QueryID from the show command and execute again
         get_PK_sql = 'SELECT * FROM table(RESULT_SCAN(LAST_QUERY_ID(-1)))'
         pk_list_df = session.sql(get_PK_sql).to_pandas()
+        #st.write(pk_list_df)
         return pk_list_df
     except Exception as e:
         st.sidebar.error("Sorry, An error occcured in get_primary_keys(): " + str(e))
@@ -90,21 +110,45 @@ except Exception as e:
 sf_database = session.get_current_database()
 sf_schema = session.get_current_schema()
 
-table_list_df = get_table_list(sf_database, sf_schema)
+#sf_database = 'DEMODB'
+#sf_schema = 'DEMO'
 
+
+col1, col2, col3 = st.columns(3)
+col1.header("Database")
+col2.header("Schema")
+col3.header("Tables")
+
+dbs=exec_sql(session, "show databases")    
+dbs=dbs[["name"]]
+table_name=None
+if not dbs.empty :
+    selectdb = col1.selectbox('Select Database:', dbs)
+    schemas=exec_sql(session, "show schemas in database "+selectdb)
+    schemas=schemas[["name"]]
+    
+if  not schemas.empty :   
+    selectschema = col2.selectbox('Select Schema:', schemas)
+    sf_database=dbs
+    sf_schema=schemas
+    tables=exec_sql(session, "show primary keys in schema  "+selectdb+"."+selectschema)
+
+if not tables.empty :
+        tables=tables[["table_name"]]
+        table_name = col3.selectbox('Select Table (Only display with on PK):', tables)     
+        curr_table=sf_database+"."+sf_schema+"."+table_name
     
 #TODO: parameters for table_updater(db,schema,table,sql_query,primary_key)
 #display the select box with values from table dataframe
-st.write("Select the table you'd like to edit. Only valid tables with ONE primary key defined are shown.")
+#st.write("Select the table you'd like to edit. Only valid tables with ONE primary key defined are shown.")
 
 #formatting to contain the select box to only one column, so it doesnt span the entire width
-col1, col2 = st.columns(2)
-with col1:
-    table_name = st.selectbox('Table Name',table_list_df)
+
 
 if table_name:
     st.write("You selected: " +  table_name)
     results = get_primary_keys(table_name)
+
     #error handling logic to check if 1 and only 1 PK exists. If only 1 we stop 
     if len(results) != 1 :
         #formatting to contain the error to only one column, so it doesnt span the entire width
@@ -137,7 +181,7 @@ if table_name:
 
         # create a submit button to hold the state until ready to process back to snowflake
         # this allows users to make many edits to the DF whily only submitting one merge request once complete
-        submit =st.button("Submit Changes")
+        submit =st.button("Save Data")
 
         col_list_df = get_col_list_sql(table_name)
         COL_SELECT_FOR_JSON = col_list_df.iloc[0]['COL_SELECT_FOR_JSON']
